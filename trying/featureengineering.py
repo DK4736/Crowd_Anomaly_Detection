@@ -1,86 +1,72 @@
 import pandas as pd
 import numpy as np
-from lsfr import lsfr  # Import LSFR generation function
 from sklearn.preprocessing import MinMaxScaler
-import glob  # Import glob module for file matching
-import os  # Import os module for extracting filenames
+from lsfr import lsfr
+import glob
+import os
 
-# Use glob to get all the CSV files in the directory
+# 📁 Load CSV files
 csv_files = glob.glob(r"C:\Users\21\Desktop\Crowd_Anomaly_Detection-main\Detection_Results\Training\*.csv")
-
-# ✅ Debug: Check if files are found
-print("Found CSV files:", csv_files)
 if not csv_files:
-    raise ValueError("No CSV files found in the specified directory!")
+    raise FileNotFoundError("No CSV files found!")
 
-# Read all CSV files into a list of DataFrames, extracting frame_id from filenames
+# Combine all CSVs into a single DataFrame
 df_list = []
 for file in csv_files:
-    df = pd.read_csv(file)
-
-    # Extract filename without extension as frame_id (or use a numeric ID)
-    frame_id = os.path.splitext(os.path.basename(file))[0]
-    df["frame_id"] = frame_id  # Assign ID to each row in that file
-
+    df = pd.read_csv(file).dropna(axis=1, how='all')  # Drop completely empty columns
+    if df.empty:
+        print(f"⚠️ Warning: {file} is empty and was skipped.")
+        continue
+    df['frame_id'] = os.path.splitext(os.path.basename(file))[0]
     df_list.append(df)
 
-# ✅ Debug: Check if data is loaded
-if not df_list:
-    raise ValueError("No data found! CSV files may be empty.")
+# Concatenate all data into a single DataFrame
+df = pd.concat(df_list, ignore_index=True)
+if df.empty:
+    raise ValueError("After combining, the resulting DataFrame is empty!")
 
-# Remove columns that are completely empty or have all NaN values
-df_list = [df.dropna(axis=1, how='all') for df in df_list]
+print(f"✅ Loaded {len(df)} rows from {len(df_list)} files.")
 
-# ✅ Ensure we only concatenate if data exists
-if df_list:
-    df = pd.concat(df_list, ignore_index=True)
-else:
-    raise ValueError("No valid data to concatenate!")
+# 🧠 Generate LSFR sequences
+seed = [1, 0, 0, 1]
+taps = [0, 2]
+sequence_length = 100
 
-print("Data successfully loaded and concatenated.")
-
-# Example of generating LSFR sequences
-seed = [1, 0, 0, 1]  # Example seed
-taps = [0, 2]  # Example taps
-length = 100  # Length of the sequence
-num_sequences = len(df)  # Number of sequences to generate (can be adjusted)
+# Ensure that LSFR sequences match the number of rows in the DataFrame
+if len(df) != len(csv_files):
+    print("⚠️ Warning: The number of rows in the final DataFrame does not match the number of CSV files.")
 
 # Generate LSFR sequences
-sequences = [lsfr(seed, taps, length) for _ in range(num_sequences)]
-df_lsfr = pd.DataFrame(sequences)
+lsfr_sequences = [lsfr(seed, taps, sequence_length) for _ in range(len(df))]
+df_lsfr = pd.DataFrame(lsfr_sequences)
 
-# Add feature extraction logic (e.g., number of ones, zeros, transitions)
-df_lsfr['num_ones'] = df_lsfr.apply(lambda row: row.sum(), axis=1)
-df_lsfr['num_zeros'] = df_lsfr.apply(lambda row: len(row) - row.sum(), axis=1)
+# 🔢 Add LSFR features: num_ones, num_zeros, transition_count
+df_lsfr['num_ones'] = df_lsfr.sum(axis=1)
+df_lsfr['num_zeros'] = sequence_length - df_lsfr['num_ones']
 df_lsfr['transition_count'] = df_lsfr.apply(lambda row: np.count_nonzero(np.diff(row)), axis=1)
 
-# Combine the LSFR features with the original dataframe (df)
-df_combined = pd.concat([df, df_lsfr], axis=1)
+# 🔗 Combine LSFR features with the original DataFrame
+df_combined = pd.concat([df.reset_index(drop=True), df_lsfr.reset_index(drop=True)], axis=1)
 
-# Check for missing values and handle them (if any)
-if df_combined.isnull().any().any():
-    print("Missing values found. Filling missing values...")
-    df_combined = df_combined.fillna(0)  # Optionally replace NaNs with 0
+# Fill missing values in the combined DataFrame
+df_combined.fillna(0, inplace=True)
 
-# Ensure all column names are strings (to avoid the TypeError)
-df_combined.columns = df_combined.columns.astype(str)
-
-# Identify non-numeric columns and exclude them from scaling
+# 🧪 Normalize numeric features
 non_numeric_columns = df_combined.select_dtypes(exclude=[np.number]).columns
+numeric_columns = df_combined.drop(columns=non_numeric_columns)
 
-# Exclude non-numeric columns from scaling
-df_features = df_combined.drop(columns=non_numeric_columns)
+# Convert column names to strings to avoid TypeError
+numeric_columns.columns = numeric_columns.columns.astype(str)
 
-# Normalize the features using MinMaxScaler
+# Apply MinMax scaling only on numeric columns
 scaler = MinMaxScaler()
-scaled_data = scaler.fit_transform(df_features)
-scaled_df = pd.DataFrame(scaled_data, columns=df_features.columns)
+scaled = scaler.fit_transform(numeric_columns)
+scaled_df = pd.DataFrame(scaled, columns=numeric_columns.columns)
 
-# Combine the scaled data back with the non-numeric columns (if any)
-final_df = pd.concat([scaled_df, df_combined[non_numeric_columns]], axis=1)
+# Combine the scaled numeric data with the non-numeric columns
+final_df = pd.concat([scaled_df, df_combined[non_numeric_columns].reset_index(drop=True)], axis=1)
 
-# ✅ Export df_features for import in other scripts
-df_features = final_df
-
-print("Feature engineering completed successfully!")
-print(final_df.head())  # Check the final result
+# ✅ Save the final DataFrame to CSV
+output_file = "engineered_features.csv"
+final_df.to_csv(output_file, index=False)
+print(f"✅ Feature engineering completed and saved as {output_file}")

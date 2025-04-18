@@ -2,28 +2,26 @@ import numpy as np
 
 def lsfr(seed, taps, length):
     """
-    Generate a binary LFSR sequence based on a given seed and tap positions.
+    Generate a binary LSFR (Linear Feedback Shift Register) sequence.
 
     Parameters:
-    - seed (list[int]): Initial state of the LFSR (should be non-zero).
-    - taps (list[int]): Indices for feedback taps (0-based).
-    - length (int): Number of bits to generate.
+    - seed (list[int]): Initial non-zero state of the LSFR.
+    - taps (list[int]): Feedback tap positions (0-indexed).
+    - length (int): Desired length of output sequence.
 
     Returns:
-    - list[int]: Generated LFSR sequence of given length.
+    - list[int]: Generated LSFR sequence.
     """
     if not any(seed):
-        raise ValueError("Seed cannot be all zeros!")
+        raise ValueError("Seed cannot be all zeros.")
 
-    state = np.array(seed, dtype=int)  # Ensure integer type
-    result = []
+    state = np.array(seed, dtype=int)
+    sequence = []
 
     for _ in range(length):
-        next_bit = np.bitwise_xor.reduce(state[taps])  # Compute feedback bit
-        result.append(state[-1])  # Store last bit before shifting
-
-        # Shift state and insert new bit at the beginning
+        feedback = np.bitwise_xor.reduce(state[taps])
+        sequence.append(state[-1])
         state = np.roll(state, 1)
-        state[0] = next_bit
+        state[0] = feedback
 
-    return result
+    return sequence

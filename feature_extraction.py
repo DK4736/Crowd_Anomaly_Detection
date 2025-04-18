@@ -1,26 +1,26 @@
 import os
 import cv2
 import pandas as pd
-import torch
 import logging
+from ultralytics import YOLO
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-# Load YOLOv5 Model (pretrained on COCO dataset)
-def load_yolov5_model():
-    model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
+# Load YOLOv8 Model (pretrained on COCO dataset)
+def load_yolov8_model():
+    model = YOLO("yolov8s.pt")  # You can switch to yolov8n.pt for faster speed
     return model
 
 
 # Detect objects in an image
 def detect_objects(image_path, model, frame_id):
     """
-    Detect objects in the given image using the YOLOv5 model.
+    Detect objects in the given image using the YOLOv8 model.
     Args:
         image_path (str): Path to the image.
-        model: Loaded YOLOv5 model.
+        model: Loaded YOLOv8 model.
         frame_id (int): Unique frame identifier.
     Returns:
         pd.DataFrame: DataFrame containing detected objects with labels, confidence scores, and bounding boxes.
@@ -28,31 +28,31 @@ def detect_objects(image_path, model, frame_id):
     image = cv2.imread(image_path)
     if image is None:
         logging.error(f"Failed to load image: {image_path}")
-        return pd.DataFrame()  # Return empty DataFrame if the image fails to load
+        return pd.DataFrame()
 
-    # Convert BGR to RGB
-    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    results = model(image_path)[0]
 
-    # Perform object detection
-    results = model(image_rgb)
+    if results.boxes is None or len(results.boxes) == 0:
+        logging.warning(f"No objects detected in {image_path}")
+        return pd.DataFrame()
 
-    # Extract detections as a pandas DataFrame
-    detections = results.pandas().xyxy[0]  # Bounding box coordinates and labels
+    boxes = results.boxes
+    xyxy = boxes.xyxy.cpu().numpy()
+    conf = boxes.conf.cpu().numpy()
+    cls = boxes.cls.cpu().numpy()
+    labels = [model.names[int(c)] for c in cls]
 
-    # 🔹 Add frame_id column
-    detections["frame_id"] = frame_id
+    df = pd.DataFrame(xyxy, columns=["xmin", "ymin", "xmax", "ymax"])
+    df["confidence"] = conf
+    df["class_id"] = cls
+    df["label"] = labels
+    df["frame_id"] = frame_id
 
-    return detections
+    return df
 
 
 # Save detections to a CSV file
 def save_detections_to_csv(detections, output_csv):
-    """
-    Save object detections to a CSV file.
-    Args:
-        detections (pd.DataFrame): DataFrame containing detection results.
-        output_csv (str): Path to the output CSV file.
-    """
     detections.to_csv(output_csv, index=False)
     logging.info(f"Saved detections to {output_csv}")
 
@@ -61,16 +61,14 @@ def save_detections_to_csv(detections, output_csv):
 def process_images_in_folder(folder_path, model, output_folder="Detection_Results"):
     os.makedirs(output_folder, exist_ok=True)
 
-    # 🔹 Sort images by name to maintain order
     images = sorted([f for f in os.listdir(folder_path) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif'))])
     logging.info(f"Found {len(images)} images in {folder_path}")
 
-    for frame_id, image_name in enumerate(images):  # Assign frame_id based on sorted order
+    for frame_id, image_name in enumerate(images):
         image_path = os.path.join(folder_path, image_name)
         detections = detect_objects(image_path, model, frame_id)
 
         if detections.empty:
-            logging.warning(f"No objects detected in {image_path}")
             continue
 
         output_csv = os.path.join(output_folder, f"{os.path.splitext(image_name)[0]}_detections.csv")
@@ -79,17 +77,13 @@ def process_images_in_folder(folder_path, model, output_folder="Detection_Result
 
 # Main Execution
 if __name__ == "__main__":
-    # Load the YOLOv5 model
-    model = load_yolov5_model()
+    model = load_yolov8_model()
 
-    # Paths to Training and Testing Image Folders
     training_image_folder = r"C:\Users\21\Desktop\Crowd_Anomaly_Detection-main\ProcessedImages\training_videos_images"
     testing_image_folder = r"C:\Users\21\Desktop\Crowd_Anomaly_Detection-main\ProcessedImages\testing_videos_images"
 
-    # Process Training Images
     logging.info("Processing training images...")
     process_images_in_folder(training_image_folder, model, output_folder="Detection_Results/Training")
 
-    # Process Testing Images
     logging.info("Processing testing images...")
     process_images_in_folder(testing_image_folder, model, output_folder="Detection_Results/Testing")
